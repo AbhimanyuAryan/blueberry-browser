@@ -2,6 +2,8 @@ import { WebContents } from "electron";
 import { streamText, type LanguageModel, type CoreMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { anthropic } from "@ai-sdk/anthropic";
+import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import type { CopilotSession } from "@github/copilot-sdk";
 import * as dotenv from "dotenv";
 import { join } from "path";
 import type { Window } from "./Window";
@@ -19,11 +21,12 @@ interface StreamChunk {
   isComplete: boolean;
 }
 
-type LLMProvider = "openai" | "anthropic";
+type LLMProvider = "openai" | "anthropic" | "github";
 
 const DEFAULT_MODELS: Record<LLMProvider, string> = {
   openai: "gpt-4o-mini",
   anthropic: "claude-3-5-sonnet-20241022",
+  github: "gpt-4o",
 };
 
 const MAX_CONTEXT_LENGTH = 4000;
@@ -35,6 +38,8 @@ export class LLMClient {
   private readonly provider: LLMProvider;
   private readonly modelName: string;
   private readonly model: LanguageModel | null;
+  private copilotClient: CopilotClient | null = null;
+  private copilotSession: CopilotSession | null = null;
   private messages: CoreMessage[] = [];
 
   constructor(webContents: WebContents) {
@@ -42,6 +47,9 @@ export class LLMClient {
     this.provider = this.getProvider();
     this.modelName = this.getModelName();
     this.model = this.initializeModel();
+    if (this.provider === "github") {
+      this.copilotClient = this.initializeCopilotClient();
+    }
 
     this.logInitializationStatus();
   }
@@ -54,7 +62,8 @@ export class LLMClient {
   private getProvider(): LLMProvider {
     const provider = process.env.LLM_PROVIDER?.toLowerCase();
     if (provider === "anthropic") return "anthropic";
-    return "openai"; // Default to OpenAI
+    if (provider === "github") return "github";
+    return "openai";
   }
 
   private getModelName(): string {
@@ -62,6 +71,7 @@ export class LLMClient {
   }
 
   private initializeModel(): LanguageModel | null {
+    if (this.provider === "github") return null; // uses CopilotClient instead
     const apiKey = this.getApiKey();
     if (!apiKey) return null;
 
@@ -73,6 +83,11 @@ export class LLMClient {
       default:
         return null;
     }
+  }
+
+  private initializeCopilotClient(): CopilotClient {
+    const token = process.env.GITHUB_TOKEN;
+    return new CopilotClient(token ? { gitHubToken: token } : undefined);
   }
 
   private getApiKey(): string | undefined {
@@ -87,15 +102,19 @@ export class LLMClient {
   }
 
   private logInitializationStatus(): void {
-    if (this.model) {
+    const isReady = this.provider === "github" ? this.copilotClient !== null : this.model !== null;
+    if (isReady) {
       console.log(
         `✅ LLM Client initialized with ${this.provider} provider using model: ${this.modelName}`
       );
     } else {
-      const keyName =
-        this.provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+      const keyNames: Record<LLMProvider, string> = {
+        anthropic: "ANTHROPIC_API_KEY",
+        openai: "OPENAI_API_KEY",
+        github: "GITHUB_TOKEN",
+      };
       console.error(
-        `❌ LLM Client initialization failed: ${keyName} not found in environment variables.\n` +
+        `❌ LLM Client initialization failed: ${keyNames[this.provider]} not found in environment variables.\n` +
           `Please add your API key to the .env file in the project root.`
       );
     }
@@ -145,7 +164,8 @@ export class LLMClient {
       // Send updated messages to renderer
       this.sendMessagesToRenderer();
 
-      if (!this.model) {
+      const isReady = this.provider === "github" ? this.copilotClient !== null : this.model !== null;
+      if (!isReady) {
         this.sendErrorMessage(
           request.messageId,
           "LLM service is not configured. Please add your API key to the .env file."
@@ -153,16 +173,91 @@ export class LLMClient {
         return;
       }
 
-      const messages = await this.prepareMessagesWithContext(request);
-      await this.streamResponse(messages, request.messageId);
+      if (this.provider === "github") {
+        await this.sendCopilotMessage(request);
+      } else {
+        const messages = await this.prepareMessagesWithContext(request);
+        await this.streamResponse(messages, request.messageId);
+      }
     } catch (error) {
       console.error("Error in LLM request:", error);
       this.handleStreamError(error, request.messageId);
     }
   }
 
+  private async sendCopilotMessage(request: ChatRequest): Promise<void> {
+    const client = this.copilotClient!;
+
+    if (client.getState() !== "connected") {
+      await client.start();
+    }
+
+    // Create a new session on the first message of a conversation, capturing
+    // current page context as the system prompt so it stays consistent for
+    // the whole conversation thread.
+    if (!this.copilotSession) {
+      let pageUrl: string | null = null;
+      let pageText: string | null = null;
+      if (this.window) {
+        const activeTab = this.window.activeTab;
+        if (activeTab) {
+          pageUrl = activeTab.url;
+          try {
+            pageText = await activeTab.getTabText();
+          } catch {
+            // non-fatal
+          }
+        }
+      }
+
+      this.copilotSession = await client.createSession({
+        model: this.modelName,
+        streaming: true,
+        onPermissionRequest: approveAll,
+        systemMessage: { mode: "replace", content: this.buildSystemPrompt(pageUrl, pageText) },
+      });
+    }
+
+    const session = this.copilotSession;
+    const messageIndex = this.messages.length;
+    this.messages.push({ role: "assistant", content: "" });
+
+    await new Promise<void>((resolve, reject) => {
+      let accumulatedText = "";
+
+      const unsubDelta = session.on("assistant.message_delta", (event: any) => {
+        const delta: string = event.data.deltaContent ?? "";
+        accumulatedText += delta;
+        this.messages[messageIndex] = { role: "assistant", content: accumulatedText };
+        this.sendMessagesToRenderer();
+        this.sendStreamChunk(request.messageId, { content: delta, isComplete: false });
+      });
+
+      const unsubIdle = session.on("session.idle", () => {
+        unsubDelta();
+        unsubIdle();
+        this.messages[messageIndex] = { role: "assistant", content: accumulatedText };
+        this.sendMessagesToRenderer();
+        this.sendStreamChunk(request.messageId, { content: accumulatedText, isComplete: true });
+        resolve();
+      });
+
+      session.on("session.error", () => {
+        unsubDelta();
+        unsubIdle();
+        reject(new Error("Copilot session encountered an error"));
+      });
+
+      session.send({ prompt: request.message });
+    });
+  }
+
   clearMessages(): void {
     this.messages = [];
+    if (this.copilotSession) {
+      this.copilotSession.disconnect().catch(() => {});
+      this.copilotSession = null;
+    }
     this.sendMessagesToRenderer();
   }
 

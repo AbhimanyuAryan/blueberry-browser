@@ -134,3 +134,6 @@ logs/
 *.pem
 *.key
 *.cert
+
+.claude
+memory/

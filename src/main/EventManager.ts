@@ -10,6 +10,9 @@ export class EventManager {
   }
 
   private setupEventHandlers(): void {
+    // Remove any handlers from a previous window instance before re-registering
+    this.cleanup();
+
     // Tab management events
     this.handleTabEvents();
 

@@ -1,5 +1,4 @@
-import { is } from "@electron-toolkit/utils";
-import { BaseWindow, WebContentsView } from "electron";
+import { app, BaseWindow, WebContentsView } from "electron";
 import { join } from "path";
 import { LLMClient } from "./LLMClient";
 
@@ -30,7 +29,7 @@ export class SideBar {
     });
 
     // Load the Sidebar React app
-    if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
+    if (!app.isPackaged && process.env["ELECTRON_RENDERER_URL"]) {
       // In development, load through Vite dev server
       const sidebarUrl = new URL(
         "/sidebar/",

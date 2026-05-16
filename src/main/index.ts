@@ -1,5 +1,4 @@
 import { app, BrowserWindow } from "electron";
-import { electronApp } from "@electron-toolkit/utils";
 import { Window } from "./Window";
 import { AppMenu } from "./Menu";
 import { EventManager } from "./EventManager";
@@ -16,7 +15,9 @@ const createWindow = (): Window => {
 };
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId("com.electron");
+  if (process.platform === "win32") {
+    app.setAppUserModelId(app.isPackaged ? "com.electron" : process.execPath);
+  }
 
   mainWindow = createWindow();
 

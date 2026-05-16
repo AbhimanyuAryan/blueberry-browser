@@ -1,5 +1,4 @@
-import { is } from "@electron-toolkit/utils";
-import { BaseWindow, WebContentsView } from "electron";
+import { app, BaseWindow, WebContentsView } from "electron";
 import { join } from "path";
 
 export class TopBar {
@@ -24,7 +23,7 @@ export class TopBar {
     });
 
     // Load the TopBar React app
-    if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
+    if (!app.isPackaged && process.env["ELECTRON_RENDERER_URL"]) {
       // In development, load through Vite dev server
       const topbarUrl = new URL(
         "/topbar/",
