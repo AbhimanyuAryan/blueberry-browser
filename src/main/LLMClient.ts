@@ -1,4 +1,5 @@
 import { WebContents } from "electron";
+import { execSync } from "child_process";
 import { streamText, type LanguageModel, type CoreMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -23,10 +24,10 @@ interface StreamChunk {
 
 type LLMProvider = "openai" | "anthropic" | "github";
 
-const DEFAULT_MODELS: Record<LLMProvider, string> = {
+const DEFAULT_MODELS: Record<LLMProvider, string | undefined> = {
   openai: "gpt-4o-mini",
   anthropic: "claude-3-5-sonnet-20241022",
-  github: "gpt-4o",
+  github: undefined, // let Copilot use its default model
 };
 
 const MAX_CONTEXT_LENGTH = 4000;
@@ -36,7 +37,7 @@ export class LLMClient {
   private readonly webContents: WebContents;
   private window: Window | null = null;
   private readonly provider: LLMProvider;
-  private readonly modelName: string;
+  private readonly modelName: string | undefined;
   private readonly model: LanguageModel | null;
   private copilotClient: CopilotClient | null = null;
   private copilotSession: CopilotSession | null = null;
@@ -66,7 +67,7 @@ export class LLMClient {
     return "openai";
   }
 
-  private getModelName(): string {
+  private getModelName(): string | undefined {
     return process.env.LLM_MODEL || DEFAULT_MODELS[this.provider];
   }
 
@@ -75,19 +76,29 @@ export class LLMClient {
     const apiKey = this.getApiKey();
     if (!apiKey) return null;
 
+    const model = this.modelName!;
     switch (this.provider) {
       case "anthropic":
-        return anthropic(this.modelName);
+        return anthropic(model);
       case "openai":
-        return openai(this.modelName);
+        return openai(model);
       default:
         return null;
     }
   }
 
   private initializeCopilotClient(): CopilotClient {
-    const token = process.env.GITHUB_TOKEN;
+    const token = this.resolveGitHubToken();
     return new CopilotClient(token ? { gitHubToken: token } : undefined);
+  }
+
+  private resolveGitHubToken(): string | undefined {
+    if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+    try {
+      return execSync("gh auth token", { encoding: "utf-8" }).trim();
+    } catch {
+      return undefined;
+    }
   }
 
   private getApiKey(): string | undefined {
@@ -211,7 +222,7 @@ export class LLMClient {
       }
 
       this.copilotSession = await client.createSession({
-        model: this.modelName,
+        ...(this.modelName ? { model: this.modelName } : {}),
         streaming: true,
         onPermissionRequest: approveAll,
         systemMessage: { mode: "replace", content: this.buildSystemPrompt(pageUrl, pageText) },

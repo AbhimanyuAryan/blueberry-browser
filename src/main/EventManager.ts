@@ -251,8 +251,17 @@ export class EventManager {
     });
   }
 
-  // Clean up event listeners
+  // Clean up event listeners and IPC handlers
   public cleanup(): void {
     ipcMain.removeAllListeners();
+    const handles = [
+      "create-tab", "close-tab", "switch-tab", "get-tabs",
+      "navigate-to", "navigate-tab", "go-back", "go-forward", "reload",
+      "tab-go-back", "tab-go-forward", "tab-reload", "tab-screenshot",
+      "tab-run-js", "get-active-tab-info",
+      "toggle-sidebar", "sidebar-chat-message", "sidebar-clear-chat", "sidebar-get-messages",
+      "get-page-content", "get-page-text", "get-current-url",
+    ];
+    handles.forEach(ch => ipcMain.removeHandler(ch));
   }
 }
