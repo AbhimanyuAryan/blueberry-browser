@@ -1,12 +1,14 @@
 import { app, BaseWindow, WebContentsView } from "electron";
 import { join } from "path";
 import { LLMClient } from "./LLMClient";
+import { SignalBridge } from "./SignalBridge";
 
 export class SideBar {
   private webContentsView: WebContentsView;
   private baseWindow: BaseWindow;
   private llmClient: LLMClient;
   private isVisible: boolean = true;
+  private signalBridge: SignalBridge;
 
   constructor(baseWindow: BaseWindow) {
     this.baseWindow = baseWindow;
@@ -14,8 +16,9 @@ export class SideBar {
     baseWindow.contentView.addChildView(this.webContentsView);
     this.setupBounds();
 
-    // Initialize LLM client
     this.llmClient = new LLMClient(this.webContentsView.webContents);
+    this.signalBridge = new SignalBridge(this.llmClient);
+    this.signalBridge.start();
   }
 
   private createWebContentsView(): WebContentsView {
@@ -104,5 +107,9 @@ export class SideBar {
 
   getIsVisible(): boolean {
     return this.isVisible;
+  }
+
+  cleanup(): void {
+    this.signalBridge.stop();
   }
 }

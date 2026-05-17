@@ -62,7 +62,7 @@ export class Window {
 
   private setupEventListeners(): void {
     this._baseWindow.on("closed", () => {
-      // Clean up all tabs when window is closed
+      this._sideBar.cleanup();
       this.tabsMap.forEach((tab) => tab.destroy());
       this.tabsMap.clear();
     });

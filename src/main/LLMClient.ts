@@ -42,6 +42,7 @@ export class LLMClient {
   private copilotClient: CopilotClient | null = null;
   private copilotSession: CopilotSession | null = null;
   private messages: CoreMessage[] = [];
+  private onAssistantResponse?: (messageId: string, text: string) => void;
 
   constructor(webContents: WebContents) {
     this.webContents = webContents;
@@ -55,9 +56,12 @@ export class LLMClient {
     this.logInitializationStatus();
   }
 
-  // Set the window reference after construction to avoid circular dependencies
   setWindow(window: Window): void {
     this.window = window;
+  }
+
+  setResponseCallback(cb: (messageId: string, text: string) => void): void {
+    this.onAssistantResponse = cb;
   }
 
   private getProvider(): LLMProvider {
@@ -250,6 +254,7 @@ export class LLMClient {
         this.messages[messageIndex] = { role: "assistant", content: accumulatedText };
         this.sendMessagesToRenderer();
         this.sendStreamChunk(request.messageId, { content: accumulatedText, isComplete: true });
+        this.onAssistantResponse?.(request.messageId, accumulatedText);
         resolve();
       });
 
@@ -403,6 +408,8 @@ export class LLMClient {
       content: accumulatedText,
       isComplete: true,
     });
+
+    this.onAssistantResponse?.(messageId, accumulatedText);
   }
 
   private handleStreamError(error: unknown, messageId: string): void {
